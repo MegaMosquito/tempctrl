@@ -43,7 +43,7 @@ dev: build
 # Run the container as a daemon (build not forecd here, sp must build it first)
 run:
 	-docker rm -f tempctrl 2> /dev/null || :
-	docker run -it --name tempctrl \
+	docker run -d --name tempctrl \
             --privileged --restart unless-stopped \
             -e MY_LED_COOL_0=$(MY_LED_COOL_0) \
             -e MY_LED_COOL_1=$(MY_LED_COOL_1) \
