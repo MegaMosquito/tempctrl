@@ -82,11 +82,123 @@ GPIO.setwarnings(True)
 
 
 
-# Loop forever checking timers, setting status LEDs, and operating the relays
-SLEEP_BETWEEN_STATUS_CHECKS_SEC = 0.25
-class StatusThread(threading.Thread):
-  def run(self):
-    debug(DEBUG_STATUS, "StatusThread is starting...")
+# Buttons require debouncing!
+BUTTON_DEBOUNCE_TIME_MSEC = 300
+BUTTON_BETWEEN_TIME_SEC = 0.3
+
+
+
+# Helper function for modifications the *_off_time variables
+def new_off_time(off_time, delta):
+  debug(DEBUG_BUTTONS, "--> new_off_time(%0.2f) [%0.2f]" % (delta, off_time - time.time()))
+  if off_time < time.time():
+    if delta > 0:
+      off_time = time.time() + delta
+  else:
+    if delta > 0:
+      off_time += delta
+    elif delta < 0 and off_time + delta <= time.time():
+      off_time = time.time() - 0.01
+    else:
+      off_time += delta
+  # Enforce the timer maximum
+  now = time.time()
+  max = now + (TIME_MAX_IN_MINUTES * 60.0)
+  if off_time > max:
+    off_time = max
+  debug(DEBUG_BUTTONS, "<-- new_off_time(%0.2f) [%0.2f]" % (delta, off_time - time.time()))
+  return off_time
+
+
+
+last_button=time.time() - 0.01
+def cool_more(pin):
+  global cool_off_time
+  global warm_off_time
+  global last_button
+  if time.time() > last_button + BUTTON_BETWEEN_TIME_SEC:
+    debug(DEBUG_BUTTONS, "COOL MORE")
+    last_button = time.time()
+    warm_off_time = time.time() - 0.01
+    cool_off_time = new_off_time(cool_off_time, TIME_QUANTUM_IN_MINUTES * 60.0)
+
+def cool_less(pin):
+  global cool_off_time
+  global warm_off_time
+  global last_button
+  if time.time() > last_button + BUTTON_BETWEEN_TIME_SEC:
+    debug(DEBUG_BUTTONS, "COOL LESS")
+    last_button = time.time()
+    warm_off_time = time.time() - 0.01
+    cool_off_time = new_off_time(cool_off_time, - TIME_QUANTUM_IN_MINUTES * 60.0)
+
+def warm_more(pin):
+  global cool_off_time
+  global warm_off_time
+  global last_button
+  if time.time() > last_button + BUTTON_BETWEEN_TIME_SEC:
+    debug(DEBUG_BUTTONS, "WARM MORE")
+    last_button = time.time()
+    cool_off_time = time.time() - 0.01
+    warm_off_time = new_off_time(warm_off_time, TIME_QUANTUM_IN_MINUTES * 60.0)
+
+def warm_less(pin):
+  global cool_off_time
+  global warm_off_time
+  global last_button
+  if time.time() > last_button + BUTTON_BETWEEN_TIME_SEC:
+    debug(DEBUG_BUTTONS, "WARM LESS")
+    last_button = time.time()
+    cool_off_time = time.time() - 0.01
+    warm_off_time = new_off_time(warm_off_time, - TIME_QUANTUM_IN_MINUTES * 60.0)
+
+
+
+def cleanup():
+  global keep_running
+  keep_running = False
+  GPIO.output(MY_RELAY_COOL, RELAY_OFF)
+  GPIO.output(MY_RELAY_WARM, RELAY_OFF)
+  GPIO.output(MY_LED_COOL_0, GPIO.LOW)
+  GPIO.output(MY_LED_COOL_1, GPIO.LOW)
+  GPIO.output(MY_LED_COOL_2, GPIO.LOW)
+  GPIO.output(MY_LED_WARM_0, GPIO.LOW)
+  GPIO.output(MY_LED_WARM_1, GPIO.LOW)
+  GPIO.output(MY_LED_WARM_2, GPIO.LOW)
+
+
+
+# Global variables and main program
+cool_off_time = time.time() - 0.01
+warm_off_time = time.time() - 0.01
+def main():
+
+  try:                                                                        
+
+    # Initialize the output (LED and relay) pins
+    GPIO.output(MY_LED_COOL_0, GPIO.LOW)
+    GPIO.output(MY_LED_COOL_1, GPIO.LOW)
+    GPIO.output(MY_LED_COOL_2, GPIO.LOW)
+    GPIO.output(MY_RELAY_COOL, RELAY_OFF)
+    GPIO.output(MY_LED_WARM_0, GPIO.LOW)
+    GPIO.output(MY_LED_WARM_1, GPIO.LOW)
+    GPIO.output(MY_LED_WARM_2, GPIO.LOW)
+    GPIO.output(MY_RELAY_WARM, RELAY_OFF)
+
+    # Attach callback functions to each of the buttons
+    GPIO.add_event_detect(MY_BUTTON_COOL_MORE, GPIO.FALLING, callback=cool_more, bouncetime=BUTTON_DEBOUNCE_TIME_MSEC)
+    GPIO.add_event_detect(MY_BUTTON_COOL_LESS, GPIO.FALLING, callback=cool_less, bouncetime=BUTTON_DEBOUNCE_TIME_MSEC)
+    GPIO.add_event_detect(MY_BUTTON_WARM_MORE, GPIO.FALLING, callback=warm_more, bouncetime=BUTTON_DEBOUNCE_TIME_MSEC)
+    GPIO.add_event_detect(MY_BUTTON_WARM_LESS, GPIO.FALLING, callback=warm_less, bouncetime=BUTTON_DEBOUNCE_TIME_MSEC)
+
+    
+    # Loop forever to monitor timers, set LEDS, and control the relays
+    global cool_off_time
+    global warm_off_time
+    global keep_running
+    keep_running = True
+    MAIN_LOOP_SLEEP_SEC = 0.5
+    debug(DEBUG_STATUS, "Main loop is starting...")
     while keep_running:
       now = time.time()
       if cool_off_time > now:
@@ -134,112 +246,8 @@ class StatusThread(threading.Thread):
         GPIO.output(MY_LED_WARM_1, GPIO.LOW)
         GPIO.output(MY_LED_WARM_2, GPIO.LOW)
 
-      time.sleep(SLEEP_BETWEEN_STATUS_CHECKS_SEC)
-    debug(DEBUG_STATUS, "StatusThread has ended.")
-
-
-
-# Loop forever watching the buttons, and adjusting cool and warm timer globals
-SLEEP_BETWEEN_BUTTON_CHECKS_SEC = 0.5
-class ButtonThread(threading.Thread):
-
-  # Helper function for modifications the *_off_time variables
-  @classmethod
-  def new_off_time(cls, off_time, delta):
-    debug(DEBUG_BUTTONS, "--> new_off_time(%0.2f) [%0.2f]" % (delta, off_time - time.time()))
-    if off_time < time.time():
-      if delta > 0:
-        off_time = time.time() + delta
-    else:
-      if delta > 0:
-        off_time += delta
-      elif delta < 0 and off_time + delta <= time.time():
-        off_time = time.time() - 1
-      else:
-        off_time += delta
-    # Enforce the timer maximum
-    now = time.time()
-    max = now + (TIME_MAX_IN_MINUTES * 60.0)
-    if off_time > max:
-      off_time = max
-    debug(DEBUG_BUTTONS, "<-- new_off_time(%0.2f) [%0.2f]" % (delta, off_time - time.time()))
-    return off_time
-
-  def run(self):
-    global cool_off_time
-    global warm_off_time
-    debug(DEBUG_BUTTONS, "ButtonThread is starting...")
-    while keep_running:
-      if GPIO.event_detected(MY_BUTTON_COOL_MORE):
-        debug(DEBUG_BUTTONS, "COOL MORE")
-        warm_off_time = time.time() - 1
-        cool_off_time = ButtonThread.new_off_time(cool_off_time, TIME_QUANTUM_IN_MINUTES * 60.0)
-      if GPIO.event_detected(MY_BUTTON_COOL_LESS):
-        debug(DEBUG_BUTTONS, "COOL LESS")
-        cool_off_time = ButtonThread.new_off_time(cool_off_time, - TIME_QUANTUM_IN_MINUTES * 60.0)
-      if GPIO.event_detected(MY_BUTTON_WARM_MORE):
-        debug(DEBUG_BUTTONS, "WARM MORE")
-        cool_off_time = time.time() - 1
-        warm_off_time = ButtonThread.new_off_time(warm_off_time, TIME_QUANTUM_IN_MINUTES * 60.0)
-      if GPIO.event_detected(MY_BUTTON_WARM_LESS):
-        debug(DEBUG_BUTTONS, "WARM LESS")
-        warm_off_time = ButtonThread.new_off_time(warm_off_time, - TIME_QUANTUM_IN_MINUTES * 60.0)
-      time.sleep(SLEEP_BETWEEN_BUTTON_CHECKS_SEC)
-    debug(DEBUG_BUTTONS, "ButtonThread has ended.")
-
-
-
-def cleanup():
-  global keep_running
-  keep_running = False
-  GPIO.output(MY_RELAY_COOL, RELAY_OFF)
-  GPIO.output(MY_RELAY_WARM, RELAY_OFF)
-  GPIO.output(MY_LED_COOL_0, GPIO.LOW)
-  GPIO.output(MY_LED_COOL_1, GPIO.LOW)
-  GPIO.output(MY_LED_COOL_2, GPIO.LOW)
-  GPIO.output(MY_LED_WARM_0, GPIO.LOW)
-  GPIO.output(MY_LED_WARM_1, GPIO.LOW)
-  GPIO.output(MY_LED_WARM_2, GPIO.LOW)
-
-
-
-# Global variables and main program
-cool_off_time = time.time() - 1
-warm_off_time = time.time() - 1
-def main():
-
-  try:                                                                        
-
-    # Initialize the output (LED and relay) pins
-    GPIO.output(MY_LED_COOL_0, GPIO.LOW)
-    GPIO.output(MY_LED_COOL_1, GPIO.LOW)
-    GPIO.output(MY_LED_COOL_2, GPIO.LOW)
-    GPIO.output(MY_RELAY_COOL, RELAY_OFF)
-    GPIO.output(MY_LED_WARM_0, GPIO.LOW)
-    GPIO.output(MY_LED_WARM_1, GPIO.LOW)
-    GPIO.output(MY_LED_WARM_2, GPIO.LOW)
-    GPIO.output(MY_RELAY_WARM, RELAY_OFF)
-
-    GPIO.add_event_detect(MY_BUTTON_COOL_MORE, GPIO.RISING)
-    GPIO.add_event_detect(MY_BUTTON_COOL_LESS, GPIO.RISING)
-    GPIO.add_event_detect(MY_BUTTON_WARM_MORE, GPIO.RISING)
-    GPIO.add_event_detect(MY_BUTTON_WARM_LESS, GPIO.RISING)
-
-    global cool_off_time
-    global warm_off_time
-    global keep_running
-    keep_running = True
-
-    # Monitor timers, set LEDS, and control the relays
-    status = StatusThread()
-    status.start()
-
-    # Monitor the button objects, and set the *_off_time globals as needed
-    buttons = ButtonThread()
-    buttons.start()
-
-    while keep_running:
-      time.sleep(2)
+      time.sleep(MAIN_LOOP_SLEEP_SEC)
+    debug(DEBUG_STATUS, "Program has ended.")
 
   except KeyboardInterrupt:
     cleanup()
